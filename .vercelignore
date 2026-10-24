@@ -1,0 +1,7 @@
+# Exclude heavy deep learning backend, datasets, and local caches from Vercel deployments
+backend/
+dataset/
+.vscode/
+.pytest_cache/
+run_axonova.bat
+run_axonova.ps1

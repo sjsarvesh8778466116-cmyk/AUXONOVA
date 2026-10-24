@@ -48,7 +48,14 @@ import {
   RegisterData,
 } from '../types/auth';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+const getBaseUrl = (): string => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (!envUrl) return '/api';
+  const trimmed = envUrl.replace(/\/+$/, '');
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+};
+
+const API_BASE_URL = getBaseUrl();
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
