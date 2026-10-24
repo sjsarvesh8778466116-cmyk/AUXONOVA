@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AXONOVA: Deep Learning-Based Brain MRI Image Classification & Analysis Platform
 
 > **ACADEMIC & RESEARCH DISCLAIMER:**
@@ -248,3 +249,6 @@ The baseline model was evaluated against the held-out test split (`dataset/test/
 3. **Modalities Supported:** Strictly brain MRI scans (Axial, Coronal, Sagittal). Non-MRI modalities (CT, Chest X-rays) are rejected.
 4. **No Patient PII Storage:** Uploaded scans are evaluated in volatile memory and are not permanently saved to disk or database.
 5. **Educational Scope:** Under no circumstances should AXONOVA be utilized as a substitute for certified radiological review or professional clinical judgment.
+=======
+# AUXONOVA
+>>>>>>> 26507366e6b18bcce29e5d11f1acfcc0dfd1ab4c
