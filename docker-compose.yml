@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: axonova-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - AXONOVA_HOST=0.0.0.0
+      - AXONOVA_PORT=8000
+      - AXONOVA_CORS_ORIGINS=http://localhost,http://localhost:80,http://localhost:5173,http://127.0.0.1
+      - AXONOVA_MAX_UPLOAD_SIZE_MB=15
+      - TF_ENABLE_ONEDNN_OPTS=0
+    volumes:
+      - ./dataset:/dataset:ro
+      - ./backend/saved_models:/app/saved_models
+      - ./backend/evaluation_results:/app/evaluation_results
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: axonova-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy

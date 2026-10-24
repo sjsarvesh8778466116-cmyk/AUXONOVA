@@ -1,0 +1,95 @@
+import React from 'react';
+import { Trash2, CheckCircle2, Images, X } from 'lucide-react';
+import { ScanGalleryItem } from '../../types';
+import { useLanguage } from '../../context/LanguageContext';
+
+interface MultiImageGalleryProps {
+  items: ScanGalleryItem[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onRemove: (id: string) => void;
+  onClearAll: () => void;
+}
+
+const MultiImageGallery: React.FC<MultiImageGalleryProps> = ({
+  items,
+  selectedId,
+  onSelect,
+  onRemove,
+  onClearAll,
+}) => {
+  const { t } = useLanguage();
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="space-y-3 p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-sm">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-2">
+          <Images className="w-4 h-4 text-teal-400" />
+          <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+            {t('scan.gallery_title')} ({items.length})
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={onClearAll}
+          className="flex items-center space-x-1 text-xs text-slate-400 hover:text-rose-400 transition-colors font-mono"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>{t('common.clear')}</span>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3 max-h-56 overflow-y-auto pr-1">
+        {items.map((item) => {
+          const isSelected = item.id === selectedId;
+          return (
+            <div
+              key={item.id}
+              onClick={() => onSelect(item.id)}
+              className={`group relative rounded-xl border overflow-hidden cursor-pointer transition-all aspect-square bg-black flex flex-col ${
+                isSelected
+                  ? 'border-teal-500 ring-2 ring-teal-500/40 shadow-teal-glow scale-[1.02]'
+                  : 'border-slate-800 hover:border-slate-700 opacity-90 hover:opacity-100'
+              }`}
+            >
+              <img
+                src={item.previewUrl}
+                alt={item.name}
+                className="w-full h-full object-cover"
+              />
+
+              {/* Selected Badge */}
+              {isSelected && (
+                <div className="absolute top-1.5 left-1.5 bg-teal-500 text-slate-950 p-0.5 rounded-full shadow">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                </div>
+              )}
+
+              {/* Remove Button */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove(item.id);
+                }}
+                className="absolute top-1.5 right-1.5 p-1 rounded-md bg-black/80 text-slate-300 hover:text-rose-400 hover:bg-slate-900 transition-colors opacity-0 group-hover:opacity-100"
+                title="Remove scan"
+              >
+                <X className="w-3 h-3" />
+              </button>
+
+              {/* Bottom Caption */}
+              <div className="absolute inset-x-0 bottom-0 bg-black/80 p-1 text-[10px] text-slate-200 truncate font-mono">
+                {item.name}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+export default MultiImageGallery;

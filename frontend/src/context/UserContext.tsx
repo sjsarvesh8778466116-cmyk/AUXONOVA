@@ -1,0 +1,202 @@
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { AuthUser, UserRole } from '../types/auth';
+
+export type { UserRole };
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  role: UserRole;
+  avatar?: string | null;
+  title: string;
+  institution?: string;
+  authMethod?: string;
+}
+
+interface UserContextType {
+  role: UserRole;
+  setRole: (role: UserRole) => void;
+  toggleRole: () => void;
+  profile: UserProfile;
+  user: AuthUser | null;
+  isLoggedIn: boolean;
+  loginUser: (userData: AuthUser, token?: string) => void;
+  logoutUser: () => void;
+  updateProfileName: (name: string) => void;
+  isStudent: boolean;
+  isPatient: boolean;
+}
+
+const DEFAULT_PROFILE: UserProfile = {
+  id: 'usr-med-01',
+  name: 'Alex Rivera',
+  email: 'student@axonova.edu',
+  role: 'student',
+  title: 'Medical Student / Clinical Trainee',
+  institution: 'Department of Neuroimaging & Neurology',
+  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+  authMethod: 'password',
+};
+
+
+const UserContext = createContext<UserContextType>({
+  role: 'student',
+  setRole: () => {},
+  toggleRole: () => {},
+  profile: DEFAULT_PROFILE,
+  user: null,
+  isLoggedIn: false,
+  loginUser: () => {},
+  logoutUser: () => {},
+  updateProfileName: () => {},
+  isStudent: true,
+  isPatient: false,
+});
+
+export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    try {
+      const savedUser = localStorage.getItem('axonova_auth_user');
+      const token = localStorage.getItem('axonova_auth_token');
+      if (savedUser && token) {
+        return JSON.parse(savedUser);
+      }
+    } catch (e) {
+      console.warn('Could not restore auth user:', e);
+    }
+    return null;
+  });
+
+  const [role, setRoleState] = useState<UserRole>(() => {
+    if (user?.role) return user.role;
+    try {
+      const saved = localStorage.getItem('axonova_active_role');
+      if (saved === 'student' || saved === 'patient') {
+        return saved;
+      }
+    } catch {}
+    return 'student';
+  });
+
+  const [profile, setProfile] = useState<UserProfile>(() => {
+    if (user) {
+      return {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        avatar: user.avatar,
+        title: user.title || (user.role === 'student' ? 'Medical Student' : 'Patient User'),
+        institution: user.institution || 'AXONOVA Health & AI Network',
+        authMethod: user.auth_method,
+      };
+    }
+    try {
+      const savedProf = localStorage.getItem('axonova_user_profile');
+      if (savedProf) {
+        return { ...DEFAULT_PROFILE, ...JSON.parse(savedProf), role };
+      }
+    } catch {}
+    return { ...DEFAULT_PROFILE, role };
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('axonova_active_role', role);
+      localStorage.setItem(
+        'axonova_user_profile',
+        JSON.stringify({ ...profile, role })
+      );
+    } catch (e) {
+      console.warn('Could not persist user role:', e);
+    }
+  }, [role, profile]);
+
+  const loginUser = (userData: AuthUser, token?: string) => {
+    setUser(userData);
+    setRoleState(userData.role);
+    setProfile({
+      id: userData.id,
+      name: userData.name,
+      email: userData.email,
+      phone: userData.phone,
+      role: userData.role,
+      avatar: userData.avatar,
+      title: userData.title || (userData.role === 'student' ? 'Medical Student' : 'Patient User'),
+      institution: userData.institution || 'AXONOVA Health & AI Network',
+      authMethod: userData.auth_method,
+    });
+    try {
+      localStorage.setItem('axonova_auth_user', JSON.stringify(userData));
+      localStorage.setItem('axonova_active_role', userData.role);
+      if (token) {
+        localStorage.setItem('axonova_auth_token', token);
+      }
+    } catch (e) {
+      console.warn('Could not store auth session:', e);
+    }
+  };
+
+  const logoutUser = () => {
+    setUser(null);
+    setRoleState('student');
+    setProfile({ ...DEFAULT_PROFILE, role: 'student' });
+    try {
+      localStorage.removeItem('axonova_auth_user');
+      localStorage.removeItem('axonova_auth_token');
+      localStorage.removeItem('axonova_user_profile');
+      localStorage.removeItem('axonova_active_role');
+    } catch (e) {
+      console.warn('Could not clear auth session:', e);
+    }
+  };
+
+  const setRole = (newRole: UserRole) => {
+    setRoleState(newRole);
+    setProfile((prev) => ({ ...prev, role: newRole }));
+    if (user) {
+      const updatedUser = { ...user, role: newRole };
+      setUser(updatedUser);
+      localStorage.setItem('axonova_auth_user', JSON.stringify(updatedUser));
+    }
+  };
+
+  const toggleRole = () => {
+    const nextRole: UserRole = role === 'patient' ? 'student' : 'patient';
+    setRole(nextRole);
+  };
+
+  const updateProfileName = (name: string) => {
+    setProfile((prev) => ({ ...prev, name }));
+    if (user) {
+      const updated = { ...user, name };
+      setUser(updated);
+      localStorage.setItem('axonova_auth_user', JSON.stringify(updated));
+    }
+  };
+
+  return (
+    <UserContext.Provider
+      value={{
+        role,
+        setRole,
+        toggleRole,
+        profile,
+        user,
+        isLoggedIn: !!user,
+        loginUser,
+        logoutUser,
+        updateProfileName,
+        isStudent: role === 'student',
+        isPatient: role === 'patient',
+      }}
+    >
+      {children}
+    </UserContext.Provider>
+  );
+};
+
+export const useUser = () => useContext(UserContext);

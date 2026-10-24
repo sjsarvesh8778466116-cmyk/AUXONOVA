@@ -1,0 +1,594 @@
+"""
+AXONOVA Medical Student Learning Module Router
+================================================
+Endpoints for the dedicated medical student learning lab:
+- Case-based de-identified educational cases
+- Reasoning-first prediction submission & comparison
+- Real CNN inference & Grad-CAM explainability comparison
+- AXONOVA AI Learning Assistant with progressive hints
+- Quizzes & assessment
+- Student learning progress & automated topics to revise
+"""
+
+import io
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from fastapi import APIRouter, HTTPException, status
+import numpy as np
+from PIL import Image
+import tensorflow as tf
+
+from app.config import (
+    DATASET_DIR,
+    DISCLAIMER_TEXT,
+    WORKSPACE_DIR,
+)
+from app.routes.predict import get_loaded_model_and_labels
+from app.schemas import (
+    CaseDetail,
+    CaseSummary,
+    ClassScore,
+    ExamEventLogRequest,
+    ExamEventLogResponse,
+    ExamStartRequest,
+    ExamStartResponse,
+    ExamSubmitRequest,
+    ExamSubmitResult,
+    MriConceptItem,
+    QuizQuestionSchema,
+    QuizSubmitRequest,
+    QuizSubmitResult,
+    StudentCaseResult,
+    StudentCaseSubmission,
+    StudentChatRequest,
+    StudentChatResponse,
+    StudentProgressData,
+    VivaEvaluateRequest,
+    VivaEvaluateResponse,
+)
+from app.student_data import (
+    EDUCATIONAL_CASES,
+    MRI_CONCEPTS,
+    QUIZ_BANK,
+    SUPPORTED_CATEGORIES,
+    TUMOR_CURRICULUM,
+)
+from app.quiz_data import QUIZ_CATEGORIES
+from app.quiz_engine import (
+    log_exam_event,
+    score_exam_submission,
+    start_exam_session,
+)
+from app.viva_engine import (
+    PRESENTATION_SECTIONS,
+    VIVA_QUESTIONS,
+    VIVA_TOPICS,
+    evaluate_viva_answer,
+)
+from model.gradcam import (
+    find_target_conv_layer,
+    generate_gradcam_heatmap,
+    get_or_build_grad_model,
+    overlay_gradcam_base64,
+)
+from model.preprocessing import load_and_preprocess_image
+
+logger = logging.getLogger("axonova.student")
+
+router = APIRouter(prefix="/api/student", tags=["Medical Student Learning"])
+
+STUDENT_DISCLAIMER = (
+    "AXONOVA is an educational and research prototype. This module is designed for medical student learning "
+    "and practice. AI outputs and case materials are educational resources, not clinical or diagnostic guidance."
+)
+
+# In-memory storage for student progress (persists during server uptime)
+_STUDENT_PROGRESS: Dict[str, Any] = {
+    "student_id": "med-student-01",
+    "name": "Medical Student",
+    "role": "Medical Student",
+    "cases_attempted": 0,
+    "cases_completed": 0,
+    "quizzes_attempted": 0,
+    "quizzes_correct": 0,
+    "streak_days": 1,
+    "concepts_mastered": {
+        "Edges": 60,
+        "Textures": 50,
+        "Shapes": 75,
+        "Intensity": 40,
+        "CNN Basics": 70,
+        "Spatial Pattern": 55,
+    },
+    "completed_case_ids": [],
+    "topics_to_revise": [
+        "Infiltrative vs Circumscribed Edges",
+        "Differentiating Edema from Enhancing Core",
+        "Grad-CAM Receptive Field Interpretation",
+    ],
+    "recent_activity": [],
+}
+
+
+@router.get("/concepts", response_model=List[MriConceptItem])
+async def get_mri_concepts():
+    """Returns educational MRI visual feature concepts (Edges, Textures, Shapes, etc.)."""
+    return [MriConceptItem(**c) for c in MRI_CONCEPTS]
+
+
+@router.get("/cases", response_model=List[CaseSummary])
+async def list_educational_cases():
+    """Returns all authorized de-identified educational cases without exposing final outcomes."""
+    summaries = []
+    for c in EDUCATIONAL_CASES:
+        summaries.append(
+            CaseSummary(
+                id=c["id"],
+                title=c["title"],
+                difficulty=c["difficulty"],
+                sequence=c["sequence"],
+                orientation=c["orientation"],
+                age_range=c["age_range"],
+                image_url=c["image_url"],
+                key_concepts=c["key_concepts"],
+            )
+        )
+    return summaries
+
+
+@router.get("/cases/{case_id}", response_model=CaseDetail)
+async def get_case_detail(case_id: str):
+    """Returns comprehensive educational case information without revealing the final category answer."""
+    case = next((c for c in EDUCATIONAL_CASES if c["id"] == case_id), None)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Educational case with ID '{case_id}' was not found.",
+        )
+
+    return CaseDetail(
+        id=case["id"],
+        title=case["title"],
+        difficulty=case["difficulty"],
+        sequence=case["sequence"],
+        orientation=case["orientation"],
+        age_range=case["age_range"],
+        image_url=case["image_url"],
+        clinical_presentation=case["clinical_presentation"],
+        imaging_observations=case["imaging_observations"],
+        learning_objectives=case["learning_objectives"],
+        key_concepts=case["key_concepts"],
+        supported_classes=SUPPORTED_CATEGORIES,
+        disclaimer=STUDENT_DISCLAIMER,
+    )
+
+
+@router.post("/cases/{case_id}/submit", response_model=StudentCaseResult)
+async def submit_case_prediction(case_id: str, submission: StudentCaseSubmission):
+    """
+    Evaluates student reasoning-first submission.
+    Runs real CNN model inference and Grad-CAM on the de-identified slice,
+    then presents a detailed comparison and educational synthesis.
+    """
+    case = next((c for c in EDUCATIONAL_CASES if c["id"] == case_id), None)
+    if not case:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Case '{case_id}' not found.",
+        )
+
+    verified_outcome = case["category"]
+    student_pred = submission.selected_category.strip()
+    is_match = (student_pred.lower() == verified_outcome.lower())
+
+    # Update student progress
+    _STUDENT_PROGRESS["cases_attempted"] += 1
+    if case_id not in _STUDENT_PROGRESS["completed_case_ids"]:
+        _STUDENT_PROGRESS["completed_case_ids"].append(case_id)
+        _STUDENT_PROGRESS["cases_completed"] += 1
+
+    # Record concept mastery and topics to revise
+    for c_concept in submission.selected_concepts:
+        current_score = _STUDENT_PROGRESS["concepts_mastered"].get(c_concept, 50)
+        _STUDENT_PROGRESS["concepts_mastered"][c_concept] = min(current_score + 10, 100)
+
+    if not is_match:
+        review_topic = f"Reviewing {verified_outcome} criteria vs {student_pred}"
+        if review_topic not in _STUDENT_PROGRESS["topics_to_revise"]:
+            _STUDENT_PROGRESS["topics_to_revise"].insert(0, review_topic)
+            _STUDENT_PROGRESS["topics_to_revise"] = _STUDENT_PROGRESS["topics_to_revise"][:6]
+
+    # Run real CNN model inference on the case file
+    cnn_pred = None
+    cnn_conf = None
+    cnn_scores = None
+    gradcam_b64 = None
+    gradcam_avail = False
+    gradcam_explanation = None
+
+    try:
+        # Locate the local image file in test split
+        img_file_path = DATASET_DIR / "test" / case["category"] / case["filename"]
+        if img_file_path.exists():
+            model, class_labels = get_loaded_model_and_labels()
+            pil_img = Image.open(img_file_path).convert("RGB")
+            preprocessed_tensor = load_and_preprocess_image(str(img_file_path), target_size=(224, 224))
+
+            # Forward pass
+            raw_logits = model(preprocessed_tensor, training=False)
+            probabilities = tf.nn.softmax(raw_logits)[0].numpy()
+            predicted_idx = int(np.argmax(probabilities))
+            cnn_pred = class_labels[predicted_idx]
+            cnn_conf = float(probabilities[predicted_idx])
+
+            cnn_scores = [
+                ClassScore(
+                    class_name=label,
+                    score=float(probabilities[i]),
+                    percentage=round(float(probabilities[i]) * 100.0, 2),
+                )
+                for i, label in enumerate(class_labels)
+            ]
+
+            # Generate Grad-CAM saliency
+            target_conv = find_target_conv_layer(model)
+            if target_conv:
+                heatmap = generate_gradcam_heatmap(
+                    model,
+                    preprocessed_tensor,
+                    target_class_idx=predicted_idx,
+                    conv_layer_name=target_conv,
+                )
+                if heatmap is not None:
+                    img_buffer = io.BytesIO()
+                    pil_img.save(img_buffer, format="JPEG")
+                    img_buffer.seek(0)
+                    gradcam_b64 = overlay_gradcam_base64(img_buffer, heatmap, alpha=0.45)
+                    if gradcam_b64:
+                        gradcam_avail = True
+                        gradcam_explanation = (
+                            f"Grad-CAM visualizes convolutional activations that contributed to the model's "
+                            f"'{cnn_pred}' statistical classification. It highlights regional feature density, "
+                            f"NOT proof of cellular pathology."
+                        )
+    except Exception as e:
+        logger.warning("Could not execute live CNN inference on student case %s: %s", case_id, e)
+
+    feedback = (
+        "Excellent reasoning! Your identified concepts align with the verified case outcome."
+        if is_match
+        else (
+            f"Let's learn from this case! You considered '{student_pred}', whereas the verified educational "
+            f"outcome is '{verified_outcome}'. Review the imaging hallmarks below to reinforce your diagnostic concepts."
+        )
+    )
+
+    return StudentCaseResult(
+        case_id=case_id,
+        student_prediction=student_pred,
+        verified_outcome=verified_outcome,
+        is_match=is_match,
+        student_reasoning=submission.reasoning or "No written reasoning supplied.",
+        student_concepts=submission.selected_concepts,
+        teaching_points=case["teaching_points"],
+        differential_considerations=case["differential_considerations"],
+        what_cnn_learns=case["what_cnn_learns"],
+        model_limitations=case["model_limitations"],
+        cnn_prediction=cnn_pred,
+        cnn_confidence=cnn_conf,
+        cnn_scores=cnn_scores,
+        gradcam_available=gradcam_avail,
+        gradcam_image_base64=gradcam_b64,
+        gradcam_explanation=gradcam_explanation,
+        educational_feedback=feedback,
+        disclaimer=STUDENT_DISCLAIMER,
+    )
+
+
+@router.post("/chat", response_model=StudentChatResponse)
+async def chat_with_learning_assistant(request: StudentChatRequest):
+    """
+    AXONOVA Learning Assistant Chatbot.
+    Provides Socratic guidance, progressive hints without spoiling answers,
+    and explanations of MRI concepts, CNN feature extraction, and differentials.
+    """
+    msg = request.message.lower().strip()
+    hint_lvl = max(0, min(request.hint_level or 0, 3))
+
+    case = None
+    if request.case_id:
+        case = next((c for c in EDUCATIONAL_CASES if c["id"] == request.case_id), None)
+
+    # 1. Progressive Hint Requests
+    if any(k in msg for k in ["hint", "clue", "help me solve", "what is this"]):
+        if not case:
+            return StudentChatResponse(
+                reply=(
+                    "I am the AXONOVA Learning Assistant! To give you a case-specific hint, "
+                    "please open an active case from the Case Library. Otherwise, ask me any question "
+                    "about MRI features like edges, textures, shapes, or CNN feature extraction!"
+                ),
+                suggested_actions=["What does texture mean in MRI?", "How do early CNN layers work?"],
+                current_hint_level=0,
+                disclaimer=STUDENT_DISCLAIMER,
+            )
+
+        hints = case["hints"]
+        if hint_lvl == 0:
+            return StudentChatResponse(
+                reply=f"💡 **Progressive Hint 1 (General MRI Concept):**\n\n{hints['hint_1']}",
+                suggested_actions=["Give me another hint", "What concepts should I consider?", "What does edge mean?"],
+                current_hint_level=1,
+                max_hint_level=3,
+                disclaimer=STUDENT_DISCLAIMER,
+            )
+        elif hint_lvl == 1:
+            return StudentChatResponse(
+                reply=f"🔍 **Progressive Hint 2 (Visual Feature Clue):**\n\n{hints['hint_2']}",
+                suggested_actions=["Give me the final clue", "What differential should I think about?"],
+                current_hint_level=2,
+                max_hint_level=3,
+                disclaimer=STUDENT_DISCLAIMER,
+            )
+        elif hint_lvl == 2:
+            return StudentChatResponse(
+                reply=f"🧠 **Progressive Hint 3 (Diagnostic Consideration):**\n\n{hints['hint_3']}",
+                suggested_actions=["Reveal verified outcome", "Why should I not rely on one feature alone?"],
+                current_hint_level=3,
+                max_hint_level=3,
+                disclaimer=STUDENT_DISCLAIMER,
+            )
+        else:
+            return StudentChatResponse(
+                reply=f"🎓 **Verified Educational Outcome:**\n\n{hints['final_reveal']}",
+                suggested_actions=["Why did the CNN make this prediction?", "Show me teaching points"],
+                current_hint_level=3,
+                max_hint_level=3,
+                disclaimer=STUDENT_DISCLAIMER,
+            )
+
+    # 2. MRI Concepts Questions
+    if "texture" in msg:
+        return StudentChatResponse(
+            reply=(
+                "**MRI Texture Explained for Medical Students:**\n\n"
+                "Texture refers to the recurring spatial variation in pixel brightness across a region. "
+                "In medical neuroimaging, a **heterogeneous texture** (mottled, irregular brightness) often indicates "
+                "mixed tissue types—such as viable tumor, necrosis, cystic fluid, or hemorrhage (frequently seen in high-grade gliomas). "
+                "In contrast, **homogeneous texture** indicates uniform tissue cellularity, common in classic meningiomas.\n\n"
+                "⚠️ *Clinical rule:* Texture alone is never sufficient for diagnosis, as motion artifacts or scanner noise can alter apparent texture."
+            ),
+            suggested_actions=["What does an edge represent?", "How does CNN extract texture?", "Give me a hint."],
+            disclaimer=STUDENT_DISCLAIMER,
+        )
+
+    if "edge" in msg or "boundary" in msg or "margin" in msg:
+        return StudentChatResponse(
+            reply=(
+                "**Edges in Brain MRI:**\n\n"
+                "An edge is an intensity gradient boundary where voxel values change markedly. "
+                "Radiologically:\n"
+                "• **Well-demarcated edges:** Suggest a capsule, dural boundary, or extra-axial compartment (e.g., Meningioma).\n"
+                "• **Ill-defined, infiltrative edges:** Suggest parenchymal invasion tracking along white matter tracts (e.g., Glioma).\n\n"
+                "To a CNN, early filters function like mathematical edge detectors calculating directional gradients."
+            ),
+            suggested_actions=["What about shapes?", "What are differential diagnoses?", "Give me a hint."],
+            disclaimer=STUDENT_DISCLAIMER,
+        )
+
+    if "differential" in msg or "differentials" in msg:
+        if case:
+            diffs = ", ".join(case["differential_considerations"])
+            return StudentChatResponse(
+                reply=(
+                    f"**Differential Considerations for this Case Presentation:**\n\n"
+                    f"When evaluating these radiological findings, clinicians consider:\n"
+                    f"• **{diffs}**\n\n"
+                    f"Notice that imaging alone cannot confirm the tissue diagnosis—histopathology, immunohistochemistry, "
+                    f"and clinical onset timeline are essential."
+                ),
+                suggested_actions=["Give me a hint.", "What concepts should I consider?", "Why should I not rely on one feature?"],
+                disclaimer=STUDENT_DISCLAIMER,
+            )
+        return StudentChatResponse(
+            reply=(
+                "A **differential diagnosis** is a list of plausible conditions that share similar clinical or radiological features. "
+                "In neuroimaging, intracranial masses often have overlapping appearances. For example, a ring-enhancing lesion "
+                "could be a glioblastoma, a solitary metastasis, a brain abscess, or tumefactive demyelination."
+            ),
+            suggested_actions=["Give me a hint.", "What features should I review?"],
+            disclaimer=STUDENT_DISCLAIMER,
+        )
+
+    if "rely on one feature" in msg or "single feature" in msg or "one feature alone" in msg:
+        return StudentChatResponse(
+            reply=(
+                "**Why You Must Never Rely on One Feature Alone:**\n\n"
+                "Radiological features are non-pathognomonic. For instance:\n"
+                "1. Contrast enhancement reflects blood-brain barrier breakdown, NOT necessarily malignancy.\n"
+                "2. Edema can surround both benign meningiomas and aggressive metastatic deposits.\n"
+                "3. Dural tails can appear in metastases, sarcoidosis, and schwannomas—not only meningiomas.\n\n"
+                "A sound radiological assessment synthesizes multi-sequence MRI (T1, T2, FLAIR, DWI, contrast), "
+                "anatomical compartment (intra vs extra-axial), patient age, and clinical timeline."
+            ),
+            suggested_actions=["What does an edge represent?", "Give me a hint."],
+            disclaimer=STUDENT_DISCLAIMER,
+        )
+
+    # 3. Default contextual assistance
+    case_context = f" for '{case['title']}'" if case else ""
+    return StudentChatResponse(
+        reply=(
+            f"Hello! I am your **AXONOVA Learning Assistant**{case_context}.\n\n"
+            f"I can help you break down the MRI visual features and understand how convolutional layers "
+            f"extract patterns from brain scans. What concept would you like to explore?"
+        ),
+        suggested_actions=[
+            "Give me a hint.",
+            "What concepts should I consider?",
+            "What does texture mean in MRI?",
+            "What does an edge represent?",
+            "What are possible differential diagnoses?",
+            "Why should I not rely on one feature alone?",
+        ],
+        current_hint_level=hint_lvl,
+        disclaimer=STUDENT_DISCLAIMER,
+    )
+
+
+@router.get("/tumors")
+async def get_tumor_curriculum():
+    """Returns the comprehensive curriculum for all supported brain tumor classes."""
+    return {
+        "supported_classes": SUPPORTED_CATEGORIES,
+        "curriculum": TUMOR_CURRICULUM,
+        "disclaimer": STUDENT_DISCLAIMER,
+    }
+
+
+@router.get("/quizzes", response_model=List[QuizQuestionSchema])
+async def get_quiz_bank():
+    """Returns the educational quiz questions for student assessment."""
+    return [QuizQuestionSchema(**q) for q in QUIZ_BANK]
+
+
+@router.post("/quizzes/submit", response_model=QuizSubmitResult)
+async def submit_quiz_answer(submission: QuizSubmitRequest):
+    """Submits a quiz question answer, records progress, and returns detailed explanation."""
+    question = next((q for q in QUIZ_BANK if q["id"] == submission.question_id), None)
+    if not question:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Question '{submission.question_id}' not found.",
+        )
+
+    is_correct = (submission.selected_index == question["correct_index"])
+    _STUDENT_PROGRESS["quizzes_attempted"] += 1
+    if is_correct:
+        _STUDENT_PROGRESS["quizzes_correct"] += 1
+    else:
+        topic_name = question["topic"]
+        if topic_name not in _STUDENT_PROGRESS["topics_to_revise"]:
+            _STUDENT_PROGRESS["topics_to_revise"].insert(0, topic_name)
+            _STUDENT_PROGRESS["topics_to_revise"] = _STUDENT_PROGRESS["topics_to_revise"][:6]
+
+    return QuizSubmitResult(
+        question_id=question["id"],
+        is_correct=is_correct,
+        correct_index=question["correct_index"],
+        explanation=question["explanation"],
+        topic=question["topic"],
+    )
+
+
+# --- Secure Anti-Cheating Exam Endpoints ---
+
+@router.get("/quizzes/categories")
+async def get_quiz_categories():
+    """Returns the 8 core medical neuroimaging quiz categories."""
+    return {"categories": QUIZ_CATEGORIES, "total_questions": len(QUIZ_BANK)}
+
+
+@router.post("/quizzes/exam/start", response_model=ExamStartResponse)
+async def start_exam(request: ExamStartRequest):
+    """
+    Initializes a secure, randomized examination attempt.
+    Answers and explanations are strictly withheld on the server until submission.
+    """
+    session = start_exam_session(
+        student_id=request.student_id,
+        category=request.category,
+        difficulty=request.difficulty,
+        num_questions=request.num_questions,
+        duration_minutes=request.duration_minutes,
+    )
+    return ExamStartResponse(**session)
+
+
+@router.post("/quizzes/exam/log-event", response_model=ExamEventLogResponse)
+async def log_exam_telemetry(request: ExamEventLogRequest):
+    """
+    Logs client-side focus and window events (tab switch, window blur, fullscreen exit)
+    to enforce exam integrity without invasive surveillance.
+    """
+    result = log_exam_event(
+        attempt_id=request.attempt_id,
+        event_type=request.event_type,
+        timestamp=request.timestamp,
+        details=request.details,
+    )
+    return ExamEventLogResponse(**result)
+
+
+@router.post("/quizzes/exam/submit", response_model=ExamSubmitResult)
+async def submit_exam(request: ExamSubmitRequest):
+    """
+    Validates and objectively scores the exam attempt strictly on the server.
+    Returns comprehensive score breakdown, topic performance, and pedagogical review.
+    """
+    try:
+        result = score_exam_submission(
+            attempt_id=request.attempt_id,
+            answers=request.answers,
+            student_progress_ref=_STUDENT_PROGRESS,
+        )
+        return ExamSubmitResult(**result)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+# --- AI Viva Coach Endpoints ---
+
+@router.get("/viva/topics")
+async def get_viva_topics():
+    """Returns the 10 core technical and medical viva categories."""
+    return {"topics": VIVA_TOPICS}
+
+
+@router.get("/viva/questions")
+async def get_viva_questions(category: Optional[str] = None):
+    """Returns viva defense practice questions, optionally filtered by topic."""
+    questions = VIVA_QUESTIONS
+    if category and category != "All":
+        questions = [q for q in questions if q.get("category", "").lower() == category.lower()]
+    return {
+        "questions": questions,
+        "total_questions": len(questions),
+        "disclaimer": STUDENT_DISCLAIMER,
+    }
+
+
+@router.post("/viva/evaluate", response_model=VivaEvaluateResponse)
+async def evaluate_viva(request: VivaEvaluateRequest):
+    """
+    Evaluates spoken or typed student viva responses against key technical and clinical concepts.
+    Provides constructive pedagogical feedback and ideal answer templates.
+    """
+    result = evaluate_viva_answer(
+        question_id=request.question_id,
+        question=request.question,
+        category=request.category,
+        student_answer=request.student_answer,
+    )
+    return VivaEvaluateResponse(**result)
+
+
+@router.get("/viva/presentation")
+async def get_presentation_script():
+    """Returns the 13-section technical viva defense presentation script."""
+    return {
+        "title": "AXONOVA Academic Viva & Technical Defense Presentation",
+        "sections": PRESENTATION_SECTIONS,
+        "disclaimer": STUDENT_DISCLAIMER,
+    }
+
+
+@router.get("/progress", response_model=StudentProgressData)
+async def get_student_progress():
+    """Returns the student learning progress, streak, mastered concepts, and revision topics."""
+    return StudentProgressData(**_STUDENT_PROGRESS)

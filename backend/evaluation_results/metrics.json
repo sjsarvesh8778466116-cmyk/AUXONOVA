@@ -1,0 +1,77 @@
+{
+  "evaluated": true,
+  "model_name": "axonova_brain_mri_best",
+  "model_version": "1.0.0",
+  "evaluated_at": "2026-09-26T16:30:37.810329+00:00",
+  "dataset_split": "Held-out Test Split",
+  "test_images_count": 80,
+  "overall_accuracy": 1.0,
+  "per_class_metrics": {
+    "Glioma": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "support": 20
+    },
+    "Meningioma": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "support": 20
+    },
+    "No_Tumor": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "support": 20
+    },
+    "Pituitary": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "support": 20
+    }
+  },
+  "confusion_matrix": {
+    "matrix": [
+      [
+        20,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        20,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        20,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        20
+      ]
+    ],
+    "classes": [
+      "Glioma",
+      "Meningioma",
+      "No_Tumor",
+      "Pituitary"
+    ]
+  },
+  "metric_interpretations": {
+    "accuracy": "Proportion of total test images correctly matched to their dataset label.",
+    "precision": "Out of all images the model labeled as class X, the fraction that were actually class X.",
+    "recall": "Out of all actual images of class X, the fraction that the model correctly identified.",
+    "f1_score": "Harmonic mean of precision and recall, balancing false positives and false negatives.",
+    "clinical_note": "High benchmark accuracy on an image dataset does not establish clinical reliability or diagnostic safety."
+  },
+  "disclaimer": "AXONOVA is an educational image-classification prototype. Its output is not a medical diagnosis and must not be used to make healthcare decisions."
+}

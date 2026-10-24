@@ -1,0 +1,26 @@
+{
+  "model_name": "AXONOVA_Brain_MRI_Classifier",
+  "version": "1.0.0",
+  "trained_at": "2026-09-26T16:29:34.105273+00:00",
+  "input_shape": [
+    224,
+    224,
+    3
+  ],
+  "supported_classes": [
+    "Glioma",
+    "Meningioma",
+    "No_Tumor",
+    "Pituitary"
+  ],
+  "supported_scan_type": "MRI",
+  "total_parameters": 1044292,
+  "trainable_parameters": 1044292,
+  "epochs_trained": 8,
+  "batch_size": 16,
+  "learning_rate": 0.0005,
+  "final_train_loss": 0.0679,
+  "final_train_accuracy": 0.9688,
+  "final_val_loss": 0.0002,
+  "final_val_accuracy": 1.0
+}

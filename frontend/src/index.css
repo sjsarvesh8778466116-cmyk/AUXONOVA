@@ -1,0 +1,227 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #0a0f1d;
+    --bg-surface: #0f172a;
+    --bg-subtle: #1e293b;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --border-light: #1e293b;
+    --medical-teal: #0d9488;
+    --medical-cyan: #06b6d4;
+    --medical-emerald: #10b981;
+  }
+
+  body {
+    @apply antialiased font-sans;
+    background-color: #0a0f1d;
+    color: #f8fafc;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: #f8fafc;
+  }
+}
+
+/* Clinical clean workstation scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Subtle transitions respecting reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Medical Scanning Beam Laser Animation */
+@keyframes scanBeam {
+  0% {
+    top: 0%;
+    opacity: 0.1;
+  }
+  15% {
+    opacity: 0.95;
+  }
+  85% {
+    opacity: 0.95;
+  }
+  100% {
+    top: 100%;
+    opacity: 0.1;
+  }
+}
+
+.animate-scan-beam {
+  animation: scanBeam 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes holographicPulse {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.02);
+  }
+}
+
+.animate-hologram {
+  animation: holographicPulse 3s ease-in-out infinite;
+}
+
+/* Medical Background Motion Keyframes */
+@keyframes floatSlow {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-14px) rotate(1.5deg);
+  }
+}
+
+@keyframes floatSlower {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(16px) rotate(-1.5deg);
+  }
+}
+
+@keyframes floatGentle {
+  0%, 100% {
+    transform: translate(0px, 0px);
+  }
+  33% {
+    transform: translate(8px, -12px);
+  }
+  66% {
+    transform: translate(-8px, -6px);
+  }
+}
+
+@keyframes medicalPulse {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scale(1);
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.2);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.02);
+    box-shadow: 0 0 35px rgba(6, 182, 212, 0.45);
+  }
+}
+
+@keyframes rotateGantrySlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rotateGantryReverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+.animate-float-slow {
+  animation: floatSlow 8s ease-in-out infinite;
+}
+
+.animate-float-slower {
+  animation: floatSlower 12s ease-in-out infinite;
+}
+
+.animate-float-gentle {
+  animation: floatGentle 15s ease-in-out infinite;
+}
+
+.animate-medical-pulse {
+  animation: medicalPulse 4s ease-in-out infinite;
+}
+
+.animate-rotate-gantry {
+  animation: rotateGantrySlow 65s linear infinite;
+}
+
+.animate-rotate-gantry-reverse {
+  animation: rotateGantryReverse 90s linear infinite;
+}
+
+/* Authentic Human Brain Floating & Subtle Scale Keyframes */
+@keyframes medicalBrainFloat {
+  0% {
+    transform: translate(0px, 0px) scale(1) rotate(0deg);
+  }
+  25% {
+    transform: translate(14px, -12px) scale(1.025) rotate(0.8deg);
+  }
+  50% {
+    transform: translate(0px, -20px) scale(1.04) rotate(0deg);
+  }
+  75% {
+    transform: translate(-14px, -10px) scale(1.018) rotate(-0.8deg);
+  }
+  100% {
+    transform: translate(0px, 0px) scale(1) rotate(0deg);
+  }
+}
+
+.animate-brain-float {
+  animation: medicalBrainFloat 16s ease-in-out infinite;
+}
+
+/* Subtle MRI Scanning Line for the Brain */
+@keyframes brainScanSweep {
+  0% {
+    top: -5%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.9;
+  }
+  85% {
+    opacity: 0.9;
+  }
+  100% {
+    top: 105%;
+    opacity: 0;
+  }
+}
+
+.animate-brain-scan {
+  animation: brainScanSweep 4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+
+

@@ -1,0 +1,223 @@
+import io
+import json
+import logging
+import time
+from typing import Optional
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+import numpy as np
+import tensorflow as tf
+
+from app.config import (
+    DISCLAIMER_TEXT,
+    LABELS_FILE_PATH,
+    METADATA_FILE_PATH,
+    MODEL_FILE_PATH,
+)
+from app.schemas import ClassScore, PredictionResponse
+from app.utils.validation import validate_uploaded_image
+from model.gradcam import (
+    find_target_conv_layer,
+    generate_gradcam_heatmap,
+    get_or_build_grad_model,
+    overlay_gradcam_base64,
+)
+from model.preprocessing import load_and_preprocess_image
+
+logger = logging.getLogger("axonova.predict")
+
+router = APIRouter(prefix="/api", tags=["Prediction"])
+
+# In-memory model cache for fast inference
+_CACHED_MODEL: Optional[tf.keras.Model] = None
+_CACHED_LABELS: Optional[list] = None
+
+def get_loaded_model_and_labels():
+    """Retrieves or loads the CNN model and class labels into memory with pre-warming."""
+    global _CACHED_MODEL, _CACHED_LABELS
+
+    if not MODEL_FILE_PATH.exists() or not LABELS_FILE_PATH.exists():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Model checkpoint or class labels not found. "
+                "Please train or place a trained model at backend/saved_models/axonova_brain_mri_best.keras."
+            ),
+        )
+
+    if _CACHED_MODEL is None:
+        try:
+            logger.info("Loading CNN model weights from %s...", MODEL_FILE_PATH)
+            _CACHED_MODEL = tf.keras.models.load_model(str(MODEL_FILE_PATH))
+            # Warm up model to eliminate cold-start inference lag
+            dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
+            _ = _CACHED_MODEL(dummy, training=False)
+            # Pre-build Grad-CAM sub-model
+            conv_name = find_target_conv_layer(_CACHED_MODEL)
+            if conv_name:
+                get_or_build_grad_model(_CACHED_MODEL, conv_name)
+            logger.info("Model and Grad-CAM graph pre-warmed successfully.")
+        except Exception as e:
+            logger.error("Failed to load CNN model: %s", str(e), exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to load CNN model weights: {str(e)}",
+            )
+
+    if _CACHED_LABELS is None:
+        try:
+            with open(LABELS_FILE_PATH, "r", encoding="utf-8") as f:
+                _CACHED_LABELS = json.load(f)
+        except Exception as e:
+            logger.error("Failed to parse class labels: %s", str(e), exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to parse class labels: {str(e)}",
+            )
+
+    return _CACHED_MODEL, _CACHED_LABELS
+
+
+@router.post("/predict", response_model=PredictionResponse)
+async def predict_mri_scan(
+    file: UploadFile = File(..., description="Brain MRI scan file (.jpg, .jpeg, .png)"),
+    scan_type: str = Form("MRI", description="Scan modality (MRI supported)"),
+    orientation: str = Form("Not specified", description="User-reported scan orientation"),
+):
+    """
+    Analyzes an uploaded Brain MRI image and returns model category prediction,
+    per-class scores, educational Grad-CAM visualization, and safety notices.
+    Optimized for high-speed sub-second execution.
+    """
+    t_start = time.perf_counter()
+
+    # 1. Validate Upload
+    file_bytes, valid_scan_type, valid_orientation = await validate_uploaded_image(
+        file=file,
+        scan_type=scan_type,
+        orientation=orientation,
+    )
+
+    # 2. Get Model & Labels
+    model, class_labels = get_loaded_model_and_labels()
+
+    # 3. Preprocess Image
+    try:
+        img_batch = load_and_preprocess_image(file_bytes)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Image preprocessing failed: {str(e)}",
+        )
+
+    # 4. Model Inference (Direct forward pass is 10x faster than model.predict for single batches)
+    try:
+        predictions = model(img_batch, training=False).numpy()
+        probs = predictions[0]
+    except Exception as e:
+        logger.error("Model inference failed: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Model prediction inference failed: {str(e)}",
+        )
+
+    # Verify class count matches model output
+    if len(probs) != len(class_labels):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Model output dimension ({len(probs)}) does not match "
+                f"the number of loaded class labels ({len(class_labels)})."
+            ),
+        )
+
+    # 5. Extract Ranked Scores
+    top_idx = int(np.argmax(probs))
+    predicted_category = class_labels[top_idx]
+    top_score = float(probs[top_idx])
+
+    per_class_scores = []
+    for idx, class_name in enumerate(class_labels):
+        score_val = float(probs[idx])
+        per_class_scores.append(
+            ClassScore(
+                class_name=class_name,
+                score=round(score_val, 4),
+                percentage=round(score_val * 100.0, 2),
+            )
+        )
+    # Sort per_class_scores in descending order
+    per_class_scores.sort(key=lambda x: x.score, reverse=True)
+
+    # 6. Check Uncertainty / Ambiguity Notice
+    uncertainty_notice = None
+    if len(per_class_scores) > 1:
+        diff_top_two = per_class_scores[0].score - per_class_scores[1].score
+        if top_score < 0.50 or diff_top_two < 0.15:
+            uncertainty_notice = (
+                f"Notice: The model exhibits distributed output scores between "
+                f"'{per_class_scores[0].class_name}' ({per_class_scores[0].percentage}%) and "
+                f"'{per_class_scores[1].class_name}' ({per_class_scores[1].percentage}%). "
+                "Educational CNN outputs are uncalibrated dataset scores, not clinical conclusions."
+            )
+
+    # 7. Generate Grad-CAM Explainability Heatmap
+    gradcam_available = False
+    gradcam_base64 = None
+    gradcam_explanation = None
+
+    try:
+        heatmap = generate_gradcam_heatmap(
+            model=model,
+            preprocessed_img=img_batch,
+            target_class_idx=top_idx,
+        )
+        if heatmap is not None:
+            overlay_b64 = overlay_gradcam_base64(
+                original_img_source=io.BytesIO(file_bytes),
+                heatmap=heatmap,
+            )
+            if overlay_b64:
+                gradcam_available = True
+                gradcam_base64 = overlay_b64
+                gradcam_explanation = (
+                    "The Grad-CAM overlay highlights spatial regions within the scan that most "
+                    "strongly influenced the model's feature representations for the predicted "
+                    f"category '{predicted_category}'. Grad-CAM is an algorithmic visualizer and "
+                    "does not confirm or rule out clinical pathology."
+                )
+    except Exception as e:
+        logger.error("Grad-CAM generation failed: %s", str(e), exc_info=True)
+        gradcam_available = False
+
+    elapsed = time.perf_counter() - t_start
+    logger.info("Inference completed for '%s' in %.3fs (Result: %s, %.1f%%)",
+                file.filename, elapsed, predicted_category, top_score * 100)
+
+    class_probs_map = {label: round(float(probs[i]), 6) for i, label in enumerate(class_labels)}
+    developer_diagnostics = {
+        "model_loaded": True,
+        "raw_output": [round(float(p), 6) for p in probs],
+        "class_probabilities": class_probs_map,
+        "max_probability": round(top_score, 6),
+        "confidence_threshold": 0.55,
+        "prediction_before_threshold": predicted_category,
+        "final_status": "completed",
+    }
+
+    return PredictionResponse(
+        predicted_category=predicted_category,
+        model_score=round(top_score, 4),
+        score_label="Model score (not a disease probability)",
+        per_class_scores=per_class_scores,
+        filename=file.filename or "uploaded_scan.jpg",
+        scan_type=valid_scan_type,
+        orientation_label=valid_orientation,
+        model_name="AXONOVA_Brain_MRI_Classifier",
+        model_version="1.0.0",
+        gradcam_available=gradcam_available,
+        gradcam_image_base64=gradcam_base64,
+        gradcam_explanation=gradcam_explanation,
+        uncertainty_notice=uncertainty_notice,
+        developer_diagnostics=developer_diagnostics,
+        disclaimer=DISCLAIMER_TEXT,
+    )
