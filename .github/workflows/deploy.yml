@@ -51,4 +51,7 @@ jobs:
     steps:
       - name: Deploy website
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v4git add .
+git commit -m "ci: add GitHub Pages deployment workflow and configure relative assets"
+git push origin main
+
