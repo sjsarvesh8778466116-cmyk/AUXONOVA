@@ -48,7 +48,7 @@ CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
         "AXONOVA_CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,https://sjsarvesh8778466116-cmyk.github.io"
     ).split(",")
     if origin.strip()
 ]

@@ -476,14 +476,14 @@ export const RealisticBrainViewer3D: React.FC<RealisticBrainViewer3DProps> = ({
 
     // 2. Load Real Anatomical GLB 3D Asset with Draco Decompression
     const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath('/draco/');
+    dracoLoader.setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
     const gltfLoader = new GLTFLoader();
     gltfLoader.setDRACOLoader(dracoLoader);
 
     setLoadProgress(30);
 
     gltfLoader.load(
-      '/models/brain.glb',
+      `${import.meta.env.BASE_URL}models/brain.glb`,
       (gltf) => {
         setLoadProgress(90);
         const model = gltf.scene;

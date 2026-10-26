@@ -158,14 +158,14 @@ export const WireframeBrain3D: React.FC<WireframeBrain3DProps> = ({ className = 
 
     // 4. Asynchronously Load High-Res GLB Brain if available and fade in
     const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath('/draco/');
+    dracoLoader.setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
     const gltfLoader = new GLTFLoader();
     gltfLoader.setDRACOLoader(dracoLoader);
 
     let glbLoadedMeshGroup: THREE.Group | null = null;
 
     gltfLoader.load(
-      '/models/brain.glb',
+      `${import.meta.env.BASE_URL}models/brain.glb`,
       (gltf) => {
         const model = gltf.scene;
         const box = new THREE.Box3();

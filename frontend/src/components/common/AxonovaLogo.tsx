@@ -39,7 +39,7 @@ export const AxonovaLogo: React.FC<AxonovaLogoProps> = ({
         />
 
         <img
-          src="/logo-icon.png"
+          src={`${import.meta.env.BASE_URL}logo-icon.png`}
           alt="AXONOVA Logo"
           className="relative w-full h-full object-cover rounded-xl shadow-lg border border-cyan-500/30 ring-1 ring-cyan-400/20"
         />

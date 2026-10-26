@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { api } from './api/client';
 import { LanguageProvider } from './context/LanguageContext';
 import { HistoryProvider } from './context/HistoryContext';
@@ -310,7 +310,7 @@ const AppContent: React.FC = () => {
 
 const App: React.FC = () => {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <UserProvider>
         <LanguageProvider>
           <HistoryProvider>
@@ -320,7 +320,7 @@ const App: React.FC = () => {
           </HistoryProvider>
         </LanguageProvider>
       </UserProvider>
-    </BrowserRouter>
+    </HashRouter>
   );
 };
 
