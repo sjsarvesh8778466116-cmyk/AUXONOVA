@@ -131,7 +131,7 @@ const ScanCenterPage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [progressStage, setProgressStage] = useState<string>('');
   const [progressPercent, setProgressPercent] = useState<number>(0);
-  const progressTimerRef = useRef<NodeJS.Timeout[]>([]);
+  const progressTimerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // In-Page Result State with Interactive Grad-CAM Opacity Slider
   const [inPageResult, setInPageResult] = useState<InPageAnalysisResult | null>(null);
@@ -256,7 +256,10 @@ const ScanCenterPage: React.FC = () => {
 
     setLoadingSample(true);
     try {
-      const resp = await fetch(targetUrl);
+      const resolvedUrl = targetUrl.startsWith('/')
+        ? `${import.meta.env.BASE_URL}${targetUrl.slice(1)}`
+        : targetUrl;
+      const resp = await fetch(resolvedUrl);
       if (!resp.ok) throw new Error('Benchmark fetch failed');
       const blob = await resp.blob();
       const file = new File([blob], targetName, { type: 'image/jpeg' });
